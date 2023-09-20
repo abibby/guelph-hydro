@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/abibby/guelph-hydro/hydro"
-	"github.com/davecgh/go-spew/spew"
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api/write"
 	_ "github.com/joho/godotenv/autoload"
@@ -39,8 +38,10 @@ func main() {
 		log.Fatal(err)
 	}
 	r.Next()
-	lastRecord := r.Record().Time()
-	spew.Dump(lastRecord)
+	var lastRecord time.Time = time.Date(2021, 6, 1, 0, 0, 0, 0, time.Local)
+	if r.Record() != nil {
+		lastRecord = r.Record().Time()
+	}
 
 	usages, err := hydro.Get(
 		lastRecord,
