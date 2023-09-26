@@ -2,6 +2,7 @@ package hydro
 
 import (
 	"encoding/csv"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -31,20 +32,30 @@ func Get(start, end time.Time) ([]*Usage, error) {
 	body := url.Values{}
 	body.Add("acn", os.Getenv("ACCOUNT_NUMBER"))
 	body.Add("pass", os.Getenv("PASSWORD"))
-	_, err = client.PostForm("https://apps.guelphhydro.com/AccountOnlineWeb/AccountOnlineCommand?command=login&TokenID=null", body)
+	resp, err := client.PostForm("https://apps.guelphhydro.com/AccountOnlineWeb/AccountOnlineCommand?command=login&TokenID=null", body)
 	if err != nil {
 		return nil, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode > 399 {
+		return nil, fmt.Errorf("login: invalid status %s", resp.Status)
 	}
 
 	body = url.Values{}
 	body.Add("StartDate", start.Format(time.DateOnly))
 	body.Add("EndDate", end.Format(time.DateOnly))
 	body.Add("Submit", "Submit")
-	resp, err := client.PostForm("https://apps.guelphhydro.com/AccountOnlineWeb/ChartServlet?DownloadRawDataVertical=true&UsageType=DownloadRawDataVertical", body)
+	body.Add("framing", "TOU")
+
+	resp, err = client.PostForm("https://apps.guelphhydro.com/AccountOnlineWeb/ChartServlet?DownloadRawDataVertical=true&UsageType=DownloadRawDataVertical", body)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 399 {
+		return nil, fmt.Errorf("download: invalid status %s", resp.Status)
+	}
 
 	usages := []*Usage{}
 

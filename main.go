@@ -42,6 +42,7 @@ func main() {
 	if r.Record() != nil {
 		lastRecord = r.Record().Time()
 	}
+	log.Printf("Download since %s", lastRecord.Format(time.DateOnly))
 
 	usages, err := hydro.Get(
 		lastRecord,
