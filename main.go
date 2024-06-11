@@ -1,15 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
-	"path"
 	"time"
 
 	"github.com/abibby/guelph-hydro/hydro"
@@ -42,138 +36,51 @@ func main() {
 	if r.Record() != nil {
 		lastRecord = r.Record().Time()
 	}
+	if lastRecord.After(startOfDay(time.Now()).Add(time.Hour * -24)) {
+		log.Print("no new data")
+		return
+	}
+
 	log.Printf("Download since %s", lastRecord.Format(time.DateOnly))
 
-	usages, err := hydro.Get(
-		lastRecord,
-		time.Now(),
-	)
+	c, err := hydro.New(os.Getenv("ACCOUNT_NUMBER"), os.Getenv("PASSWORD"))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	for _, u := range usages {
-		tags := map[string]string{}
-		fields := map[string]interface{}{
-			"usage": u.Usage,
-			"cost":  u.Cost,
-			"peak":  u.Peak,
+	start := lastRecord
+	finished := false
+	for !finished {
+		end := start.Add(time.Hour * 24 * 30)
+		if end.After(time.Now()) {
+			end = time.Now()
+			finished = true
 		}
-		point := write.NewPoint("sensor.guelph_hydro_energy", tags, fields, u.Time)
-		if err := writeAPI.WritePoint(ctx, point); err != nil {
+		log.Printf("Download from %v to %v", start, end)
+		usages, err := c.UsageData(start, end)
+		if err != nil {
 			log.Fatal(err)
 		}
-	}
-}
 
-type SensorAttributes struct {
-	UnitOfMeasurement string `json:"unit_of_measurement"`
-	DeviceClass       string `json:"device_class"`
-	StateClass        string `json:"state_class"`
-	// LastUpdated       time.Time `json:"last_updated"`
-	LastRest time.Time `json:"last_reset"`
-	// FriendlyName      string `json:"friendly_name"`
-}
-type SensorState struct {
-	State    float32 `json:"state"`
-	UniqueID string  `json:"unique_id"`
-	// LastUpdated time.Time         `json:"last_updated"`
-	Attributes *SensorAttributes `json:"attributes"`
-}
-
-func CreateSensor(name string) error {
-	state := &SensorState{
-		UniqueID: name,
-		Attributes: &SensorAttributes{
-			UnitOfMeasurement: "kWh",
-			DeviceClass:       "energy",
-			StateClass:        "measurement",
-			LastRest:          time.Time{},
-		},
-	}
-
-	r, err := haPost("/api/states/sensor."+name, state)
-	if err != nil {
-		return err
-	}
-	defer r.Body.Close()
-
-	return nil
-}
-
-type EventState struct {
-	EntityID    string    `json:"entity_id"`
-	State       float32   `json:"state"`
-	LastUpdated time.Time `json:"last_updated"`
-}
-type EventData struct {
-	EntityID string      `json:"entity_id"`
-	NewState *EventState `json:"new_state"`
-}
-type Event struct {
-	EventData *EventData `json:"event_data"`
-}
-
-// event_type: state_changed
-//   event_data:
-//     entity_id: sensor.3c71bf4822b8_i2saccoef
-//     new_state:
-//       entity_id: sensor.3c71bf4822b8_i2saccoef
-//       state: "1.4"
-//       last_updated: "2022-07-25T23:00:25.082925+00:00"
-
-func StateChange(entityID string, u *hydro.Usage) error {
-	event := &Event{
-		EventData: &EventData{
-			EntityID: entityID,
-			NewState: &EventState{
-				EntityID:    entityID,
-				State:       u.Usage,
-				LastUpdated: u.Time,
-			},
-		},
-	}
-
-	eventType := "state_changed"
-
-	r, err := haPost("/api/events/"+eventType, event)
-	if err != nil {
-		return err
-	}
-	defer r.Body.Close()
-
-	return nil
-}
-
-func haPost(pathName string, body any) (*http.Response, error) {
-
-	b, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest(
-		http.MethodPost,
-		"https://"+path.Join("home-assistant.adambibby.ca", pathName),
-		bytes.NewBuffer(b),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("LONG_LIVED_ACCESS_TOKEN")))
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer resp.Body.Close()
-		b, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("request failed %s", resp.Status)
+		for _, u := range usages {
+			tags := map[string]string{}
+			fields := map[string]interface{}{
+				"usage": u.Usage,
+				"cost":  u.Cost,
+				"peak":  u.Peak,
+			}
+			point := write.NewPoint("sensor.guelph_hydro_energy", tags, fields, u.Time)
+			if err := writeAPI.WritePoint(ctx, point); err != nil {
+				log.Fatal(err)
+			}
 		}
-		return nil, fmt.Errorf("request failed %s: %s", resp.Status, b)
+
+		start = end
 	}
-	return resp, nil
+
+}
+
+func startOfDay(t time.Time) time.Time {
+	year, month, day := t.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, t.Location())
 }

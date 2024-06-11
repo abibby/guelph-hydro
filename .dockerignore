@@ -1,0 +1,6 @@
+.env
+cookies.json
+docker-compose.yml
+Dockerfile
+.gitignore
+.dockerignore
